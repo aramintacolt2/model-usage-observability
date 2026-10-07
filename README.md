@@ -1,43 +1,21 @@
-# GPT-6 Sol — Usage Events And Model Observability
+# Model usage observability
 
-Argolink-focused usage events and model observability for GPT-6 Sol. This repository is a self-contained integration reference: it explains the request shape, the asynchronous lifecycle where applicable, safe retries, and the failure states that matter in production.
+This is a small client-side ledger for recording usage returned by a model response and calculating a dated estimate. It does not pretend that the service exposes a universal usage API. **[ArgoLink](https://argolink.io/gh-model-usage-observability) is one source whose response usage can be recorded.** Last checked: 2026-10-07.
 
-[GPT-6 Sol model page →](https://argolink.io/gh-model-usage-observability) · [Argolink API docs →](https://argolink.io/gh-unified-api-docs)
+## Ledger
 
-The model page is authoritative for live availability, pricing, limits, and fields. This repository gives the workflow a searchable home; it does not invent a second model catalog.
+usage/ledger.py creates a SQLite table with request ID, model, input tokens, output tokens, cost estimate, and terminal status. record is intentionally an upsert by request ID, so a resumed text request does not double-count the same response. export writes a CSV for a report. The wrapper should call record only after parsing a provider response and should keep the raw response in a private, redacted trace.
 
-## What is inside
+This ledger is not a billing authority. A provider may omit usage, expose cached tokens separately, apply long-context multipliers, or round a media charge. Store unknown as null and explain the estimate. Video should record input/output seconds and image size in a separate table because token columns do not describe those contracts.
 
-- `docs/model-contract.md`: model-specific facts checked against the current Argolink catalog.
-- `docs/workflow.md`: the intent behind this repository and the decision points that prevent accidental resubmission.
-- `examples/request.sh` and `examples/client.py`: safe, runnable request examples using `ARGOLINK_API_KEY`.
-- `tests/test_repository.py`: offline checks for the public contract and examples.
-- `ARGOLINK.md`: public-boundary rules for contributors.
+## Integration pattern
 
-## Quick start
+Wrap the SDK at one boundary. Capture model ID, endpoint family, response ID, usage fields, status, and request timestamp. Obtain the current effective rate from a dated catalog snapshot and calculate cost in the wrapper. Do not read keys from the database. Redact Authorization and signed URLs. If a request times out after a side effect, store an unknown status and investigate rather than adding a second row.
 
-Set the key only in your shell or secret manager, then run the example:
+## Reports and tests
 
-```bash
-export ARGOLINK_API_KEY='your-key'
-./examples/request.sh
-```
+python3 -m unittest discover -s tests checks a local SQLite round trip. No provider call is made. Add a CLI report only after defining how missing usage, cached input, and retries are represented. A dashboard should show sample count, unknown usage count, and source date beside totals; a single total without those qualifiers is easy to misread.
 
-The example uses model ID `gpt-6-sol` and endpoint family `/v1/responses`. The response is JSON; keep the returned request ID and redacted error body when diagnosing a failure. A timeout does not prove that a request was rejected, so do not submit a second request automatically.
+## FAQ
 
-## Model facts
-
-- Model ID: `gpt-6-sol`
-- Argolink model page: `https://argolink.io/gh-model-usage-observability` (tracked shortlink; destination is the model page)
-- Endpoint family: `/v1/responses`
-- Context: `1,050,000` tokens; max output: `128000` tokens.
-- Reasoning efforts: `low, medium, high, xhigh, max`; default: `medium`.
-- Listed token rates: input `$2` / output `$10` per million tokens; cached input `$0.2` when listed.
-
-## Scope
-
-This repository has one clear search intent: **usage events and model observability**. It keeps the integration boundary small enough for a developer or an AI assistant to answer a concrete question, while linking the live Argolink model page for changes.
-
-## Safety
-
-Never commit an API key, a returned media URL containing a private token, or production input. Examples are deliberately small and do not make a request during tests.
+**Does this guarantee provider billing matches?** No. It is an estimate. **Why SQLite?** It gives a durable local ledger without adding a service. **Can I log prompts?** Avoid it by default; store a digest or an operator label. **How are retries counted?** Each provider response gets its own ID and status, with a separate logical task ID if needed. **Can images and videos share the table?** Keep media-specific dimensions and seconds in dedicated tables.
